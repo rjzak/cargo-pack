@@ -1,0 +1,32 @@
+[package]
+name = "cargo-pack"
+description = "A cargo subcommand that builds and packs your binary into a self-extracting, compressed executable."
+categories = ["development-tools", "development-tools::cargo-plugins"]
+edition = "2024"
+keywords = [
+    "cargo",
+    "subcommand",
+    "packing",
+    "cargo-subcommand",
+    "compression",
+]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/rjzak/cargo-pack"
+version = "0.0.0"
+
+[dependencies]
+anyhow = "1.0"
+bzip2 = "0.6"
+clap = { version = "4.6", features = ["derive"] }
+crc32fast = "1.5"
+flate2 = "1.1"
+lz4_flex = "0.14"
+serde_json = "1.0"
+xz2 = { version = "0.1", features = ["static"] }
+zstd = "0.13"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
