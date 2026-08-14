@@ -85,3 +85,22 @@ pub fn human_bytes(n: u64) -> String {
         format!("{value:.1} {}", UNITS[unit])
     }
 }
+
+/// Shannon entropy of `data` in bits per byte, from `0.0` (perfectly uniform) to
+/// `8.0` (indistinguishable from random). Compressed and encrypted data sit near
+/// `8.0`; plain executables are lower, which is why packing raises entropy.
+#[allow(clippy::cast_precision_loss)]
+pub fn entropy_calc(data: &[u8]) -> f32 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mut e = 0.0;
+    let len = data.len() as f32;
+    for byte in 0..=255u8 {
+        let p = bytecount::count(data, byte) as f32 / len;
+        if p > 0.0 {
+            e -= p * p.log2();
+        }
+    }
+    e
+}

@@ -76,7 +76,7 @@ fn run_cli(exe: Option<PathBuf>) -> Result<()> {
     }
 }
 
-/// Cheaply test whether `path` ends with our footer magic, reading only the
+/// Cheaply test whether `path` ends with our trailer magic, reading only the
 /// magic bytes rather than the whole file.
 fn has_payload(path: &Path) -> bool {
     let Ok(mut f) = File::open(path) else {
@@ -85,13 +85,13 @@ fn has_payload(path: &Path) -> bool {
     let Ok(meta) = f.metadata() else {
         return false;
     };
-    let footer_size = format::FOOTER_SIZE as u64;
-    if meta.len() < footer_size {
+    let trailer_size = format::TRAILER_SIZE as u64;
+    if meta.len() < trailer_size {
         return false;
     }
     // Seek from the start (a u64 offset) to avoid a signed cast; the magic sits
-    // at the very front of the footer.
-    if f.seek(SeekFrom::Start(meta.len() - footer_size)).is_err() {
+    // at the very front of the fixed trailer.
+    if f.seek(SeekFrom::Start(meta.len() - trailer_size)).is_err() {
         return false;
     }
     let mut magic = [0u8; format::MAGIC.len()];

@@ -15,7 +15,9 @@ jobs:
           - runner: ubuntu-24.04-arm
           - runner: macos-15
           - runner: windows-latest
+            ext: .exe
           - runner: windows-11-arm
+            ext: .exe
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -27,6 +29,15 @@ jobs:
         run: rustup update
       - name: cargo test
         run: cargo test --all-features
+      - name: Test with hello world
+        run: |
+          cargo install --path .
+          cd hello_world
+          cargo pack build
+          cargo pack info ./target/debug/hello-world${{ matrix.platform.ext }}
+          ./target/debug/hello-world${{ matrix.platform.ext }}
+          cargo pack unpack ./target/debug/hello-world${{ matrix.platform.ext }}
+          ./target/debug/hello-world${{ matrix.platform.ext }}
 
   fmt_clippy:
     runs-on: ubuntu-latest

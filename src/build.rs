@@ -109,8 +109,11 @@ fn pack_in_place(
     util::write_executable(exe, &packed)?;
 
     let ratio = util::ratio_percent(packed_len, original_len);
+    let original_entropy = util::entropy_calc(&original);
+    let packed_entropy = util::entropy_calc(&packed);
     println!(
-        "cargo pack: {name}: {} -> {} ({ratio:.1}% of original)",
+        "cargo pack: {name}: {} -> {} ({ratio:.1}% of original), \
+         entropy {original_entropy:.2} -> {packed_entropy:.2} bits/byte",
         human_bytes(original_len),
         human_bytes(packed_len),
     );

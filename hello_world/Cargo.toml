@@ -1,0 +1,5 @@
+[package]
+name = "hello-world"
+edition = "2024"
+license = "MIT"
+publish = false
