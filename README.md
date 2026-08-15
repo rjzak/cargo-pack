@@ -105,6 +105,45 @@ in case the trailer format would change.
 `cargo pack build` is idempotent: re-packing an already-packed binary recovers
 the original first, so you never nest a pack inside a pack.
 
+## cargo-auditable
+
+[`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) embeds a
+dependency SBOM into a `.dep-v0` section that `cargo audit bin` reads. Packing
+replaces your binary with the loader stub, which would normally hide that
+section — so `cargo pack build` copies it into the packed binary:
+
+```console
+cargo auditable pack build --release
+cargo audit bin target/release/my-app        # Found 'cargo auditable' data
+```
+
+This works on every supported platform, by two different mechanisms:
+
+- **ELF** (Linux, the BSDs, Solaris, Haiku, …) **and PE** (Windows): the section
+  is added with `objcopy` — the `llvm-tools` component (`rustup component add
+  llvm-tools`) or your system's binutils.
+- **Mach-O** (macOS): the `cargo-pack` binary reserves a 64 KiB slot; packing
+  copies the SBOM into it, renames it to `.dep-v0` in place, and re-signs the
+  binary ad-hoc. Because a binary without an SBOM never exposes that section,
+  `cargo audit bin` reports it accurately. SBOMs larger than the slot fall back
+  to the payload-only behaviour below.
+
+  This slot costs ~64 KiB of file size in *every* packed macOS binary, even when
+  cargo-auditable isn't used (it lives in the stub). It is file-backed and never
+  touched at runtime, so it costs no meaningful RAM. If you don't need it,
+  install with `cargo install cargo-pack --no-default-features` to drop the
+  `macos-auditable` feature and the slot entirely; macOS then behaves like the
+  fallback below. ELF/PE targets have no such slot regardless.
+
+If the tooling is unavailable or the SBOM doesn't fit, packing still succeeds
+and prints a note — the original, SBOM and all, is always restored byte-for-byte
+by `cargo pack unpack`, so you can audit the recovered binary:
+
+```console
+cargo pack unpack target/release/my-app -o my-app.orig
+cargo audit bin my-app.orig                # Found 'cargo auditable' data
+```
+
 ## Current limitations & roadmap
 
 - **Stub overhead.** Because the whole `cargo-pack` binary is used as the stub,
@@ -125,7 +164,8 @@ the original first, so you never nest a pack inside a pack.
 ## Disclosures
 
 * AI tools where used in the creation of this project but with human supervision and guidance.
-* Not yet tested on Windows.
+* Only tested on mac OS, Linux, and Windows. Not tested on *BSD, Haiku. Issues on any OS supported
+  by Rust shall be supported by this project.
 
 ## License
 

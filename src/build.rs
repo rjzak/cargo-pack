@@ -3,12 +3,14 @@
 //! `cargo pack build`: build the project with cargo, then pack each produced
 //! binary in place.
 
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+use crate::auditable;
 use crate::cli::BuildArgs;
 use crate::compress;
 use crate::format;
@@ -103,7 +105,29 @@ fn pack_in_place(
         |n| n.to_string_lossy().into_owned(),
     );
 
-    let packed = format::pack(stub, &original, &name, algorithm, level)?;
+    // Carry any cargo-auditable SBOM from the original into the stub so the
+    // packed binary stays auditable; best-effort, never fatal.
+    let (stub, sbom): (Cow<[u8]>, &str) = match auditable::preserve_sbom(stub, &original) {
+        Ok(auditable::Sbom::Embedded(injected)) => {
+            (Cow::Owned(injected), ", cargo-auditable SBOM preserved")
+        }
+        Ok(auditable::Sbom::Absent) => (Cow::Borrowed(stub), ""),
+        Ok(auditable::Sbom::Skipped(reason)) => {
+            eprintln!(
+                "cargo pack: note: {name}: cargo-auditable SBOM not embedded ({reason}); \
+                 recover it with `cargo pack unpack`"
+            );
+            (Cow::Borrowed(stub), "")
+        }
+        Err(e) => {
+            eprintln!(
+                "cargo pack: warning: could not preserve cargo-auditable SBOM for {name}: {e:#}"
+            );
+            (Cow::Borrowed(stub), "")
+        }
+    };
+
+    let packed = format::pack(&stub, &original, &name, algorithm, level)?;
     let packed_len = packed.len() as u64;
 
     util::write_executable(exe, &packed)?;
@@ -113,7 +137,7 @@ fn pack_in_place(
     let packed_entropy = util::entropy_calc(&packed);
     println!(
         "cargo pack: {name}: {} -> {} ({ratio:.1}% of original), \
-         entropy {original_entropy:.2} -> {packed_entropy:.2} bits/byte",
+         entropy {original_entropy:.2} -> {packed_entropy:.2} bits/byte{sbom}",
         human_bytes(original_len),
         human_bytes(packed_len),
     );

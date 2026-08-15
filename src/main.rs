@@ -15,6 +15,7 @@
 //! footer and hands off to the [`stub`] loader instead of the CLI. That makes
 //! the packer self-hosting: no separate stub crate, no cross-compilation.
 
+mod auditable;
 mod build;
 mod cli;
 mod compress;
