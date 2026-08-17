@@ -37,8 +37,15 @@ f90476a1870054adacca158b2da3704a2242c996  hello-world
 
 ## Install
 
+From Github:
 ```console
-cargo install --path .
+$ git clone https://github.com/rjzak/cargo-pack
+$ cargo install --path cargo-pack
+```
+
+From crates.io:
+```console
+cargo install cargo-packer
 ```
 
 This installs a `cargo-pack` binary, which cargo exposes as `cargo pack`.

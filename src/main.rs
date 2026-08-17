@@ -2,6 +2,7 @@
 
 #![doc = include_str!("../README.md")]
 #![deny(clippy::all)]
+#![deny(clippy::cargo)]
 #![deny(clippy::pedantic)]
 #![forbid(unsafe_code)]
 

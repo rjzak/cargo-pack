@@ -1,6 +1,6 @@
 [package]
-name = "cargo-pack"
-description = "A cargo subcommand that builds and packs your binary into a self-extracting, compressed executable."
+name = "cargo-packer"
+description = "A cargo subcommand (`cargo pack`) that builds and packs your binary into a self-extracting, compressed executable."
 categories = ["development-tools", "development-tools::cargo-plugins"]
 edition = "2024"
 keywords = [
@@ -14,6 +14,10 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/rjzak/cargo-pack"
 version = "0.0.0"
+
+[[bin]]
+name = "cargo-pack"
+path = "src/main.rs"
 
 [features]
 default = ["macos-auditable"]
