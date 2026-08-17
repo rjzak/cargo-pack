@@ -3,6 +3,9 @@
 Inspired by [UPX](https://upx.github.io), `cargo-pack` is a cargo subcommand that builds your project and packs the
 resulting binary into a compressed, self-extracting executable; and it and can unpack it just like UPX.
 
+> [!IMPORTANT]
+> This is currently an alpha-quality project. There will be bugs!
+
 ```console
 $ cargo pack build --release
    Compiling my-app v0.1.0
@@ -95,6 +98,22 @@ compressed original plus a small trailing footer:
 [ cargo-pack stub ][ original name ][ compressed payload ][ footer body ][ trailer ]
 ```
 
+The payload is stored *inside the binary's own structure* on all three object
+formats, so the packed file stays valid and signable (no data trailing the file):
+
+- **ELF** (Linux, the BSDs, …): appended as a non-`ALLOC` `.cgpack` section
+  (append-only — program headers are untouched, so it loads unchanged).
+- **PE** (Windows): a new `.cgpack` section, leaving the end of the file free for
+  an Authenticode signature.
+- **Mach-O** (macOS): embedded in the `__LINKEDIT` segment, before the code
+  signature, and re-signed — producing a valid, strictly-signable Mach-O you can
+  re-sign with your own Developer ID.
+
+All of this is pure Rust — no external tools. If a particular object shape can't
+take a section, cargo-pack falls back to a trailing overlay. The loader finds the
+payload the same way regardless: the `.cgpack` section if present, otherwise the
+trailer at the container's logical end.
+
 When a packed binary runs, it reads its own trailing metadata, decompresses the
 original into a per-user cache (verified by CRC32), and `exec`s it —
 transparently forwarding all arguments. Because the packer reuses its own
@@ -117,11 +136,10 @@ cargo auditable pack build --release
 cargo audit bin target/release/my-app        # Found 'cargo auditable' data
 ```
 
-This works on every supported platform, by two different mechanisms:
+This works on every supported platform, in pure Rust with no external tools:
 
-- **ELF** (Linux, the BSDs, Solaris, Haiku, …) **and PE** (Windows): the section
-  is added with `objcopy` — the `llvm-tools` component (`rustup component add
-  llvm-tools`) or your system's binutils.
+- **ELF** (Linux, the BSDs, Solaris, Haiku, …) **and PE** (Windows): the SBOM is
+  added as a real `.dep-v0` section, present only when there's data to embed.
 - **Mach-O** (macOS): the `cargo-pack` binary reserves a 64 KiB slot; packing
   copies the SBOM into it, renames it to `.dep-v0` in place, and re-signs the
   binary ad-hoc. Because a binary without an SBOM never exposes that section,
@@ -135,9 +153,9 @@ This works on every supported platform, by two different mechanisms:
   `macos-auditable` feature and the slot entirely; macOS then behaves like the
   fallback below. ELF/PE targets have no such slot regardless.
 
-If the tooling is unavailable or the SBOM doesn't fit, packing still succeeds
-and prints a note — the original, SBOM and all, is always restored byte-for-byte
-by `cargo pack unpack`, so you can audit the recovered binary:
+If the SBOM is too large for the macOS slot, packing still succeeds and prints a
+note — the original, SBOM and all, is always restored byte-for-byte by
+`cargo pack unpack`, so you can audit the recovered binary:
 
 ```console
 cargo pack unpack target/release/my-app -o my-app.orig
@@ -153,19 +171,21 @@ cargo audit bin my-app.orig                # Found 'cargo auditable' data
 - **Host target only.** The stub is the packer's own binary, so packing a
   cross-compiled artifact (`--target …`) for a different platform than the
   installed `cargo-pack` is not yet supported.
-- **Code signing.** Like any packer (UPX included), packing rewrites the file
-  and so invalidates an existing code signature. If you need a signed artifact,
-  sign the *packed* binary as the final step of your build. (On Apple Silicon,
-  ad-hoc-signed dev binaries still run once packed, because the appended payload
-  is an overlay outside the signed segments.)
-- **Planned:** optionally renaming the executable's main section (à la UPX's
-  `.upx`) to for additional fun and customisability.
+- **Code signing.** Packing rewrites the file, so the *original's* signature
+  (sealed inside the compressed payload) no longer applies to the outer file. On
+  macOS, cargo-pack embeds the payload inside `__LINKEDIT` and re-signs the
+  packed binary ad-hoc, producing a valid Mach-O that passes `codesign --strict`
+  — so you can re-sign it with your own Developer ID as the final step
+  (`codesign -s "Developer ID Application: …" <packed>`). Notarization of a
+  packed binary is plausible but untested. On ELF/PE the payload is a trailing
+  overlay and there is no signing step.
 
 ## Disclosures
 
 * AI tools where used in the creation of this project but with human supervision and guidance.
 * Only tested on mac OS, Linux, and Windows. Not tested on *BSD, Haiku. Issues on any OS supported
   by Rust shall be supported by this project.
+* Not tested with signed binaries.
 
 ## License
 

@@ -15,17 +15,19 @@
 //! footer and hands off to the [`stub`] loader instead of the CLI. That makes
 //! the packer self-hosting: no separate stub crate, no cross-compilation.
 
+mod attach;
 mod auditable;
 mod build;
 mod cli;
 mod compress;
+mod elf;
 mod format;
+mod macho;
+mod pe;
 mod stub;
 mod unpack;
 mod util;
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -77,24 +79,10 @@ fn run_cli(exe: Option<PathBuf>) -> Result<()> {
     }
 }
 
-/// Cheaply test whether `path` ends with our trailer magic, reading only the
-/// magic bytes rather than the whole file.
+/// Whether `path` carries a packed payload. The trailer sits at the container's
+/// logical end — EOF for ELF/PE, or just before the code signature for a Mach-O
+/// (whose payload lives inside `__LINKEDIT`) — so we let [`format::is_packed`]
+/// locate it rather than assuming EOF.
 fn has_payload(path: &Path) -> bool {
-    let Ok(mut f) = File::open(path) else {
-        return false;
-    };
-    let Ok(meta) = f.metadata() else {
-        return false;
-    };
-    let trailer_size = format::TRAILER_SIZE as u64;
-    if meta.len() < trailer_size {
-        return false;
-    }
-    // Seek from the start (a u64 offset) to avoid a signed cast; the magic sits
-    // at the very front of the fixed trailer.
-    if f.seek(SeekFrom::Start(meta.len() - trailer_size)).is_err() {
-        return false;
-    }
-    let mut magic = [0u8; format::MAGIC.len()];
-    f.read_exact(&mut magic).is_ok() && magic == format::MAGIC
+    std::fs::read(path).is_ok_and(|bytes| format::is_packed(&bytes))
 }

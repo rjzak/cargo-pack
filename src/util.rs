@@ -56,6 +56,16 @@ fn tmp_sibling(path: &Path) -> std::path::PathBuf {
     }
 }
 
+/// A fresh, process-unique temporary directory.
+pub fn unique_tmpdir() -> Result<std::path::PathBuf> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("cargo-pack-{}-{n}", std::process::id()));
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
 /// Packed size as a percentage of the original, for display only.
 ///
 /// The `f64` conversion can lose precision for multi-petabyte inputs, which is

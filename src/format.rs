@@ -30,6 +30,8 @@
 //!
 //! All fields are little-endian.
 
+use std::borrow::Cow;
+
 use anyhow::{Context, Result, bail, ensure};
 
 use crate::compress::{self, Algorithm};
@@ -97,12 +99,41 @@ struct Trailer {
     body_len: usize,
 }
 
-/// Read and validate the fixed trailer from the end of `bytes`.
-fn read_trailer(bytes: &[u8]) -> Option<Trailer> {
-    if bytes.len() < TRAILER_SIZE {
-        return None;
+/// The logical end of a packed file. For a signed Mach-O the payload lives
+/// inside `__LINKEDIT`, before the signature, so the trailer sits at the code
+/// signature offset rather than at EOF. For everything else (unsigned Mach-O, or
+/// a trailing overlay) the logical end is the file length.
+pub fn payload_end(bytes: &[u8]) -> usize {
+    crate::macho::code_signature_offset(bytes).unwrap_or(bytes.len())
+}
+
+/// Section name carrying the packer overlay on ELF/PE, where the payload is a
+/// real section rather than a trailing overlay.
+pub const PAYLOAD_SECTION: &str = ".cgpack";
+
+/// The bytes that hold the packer overlay: the `.cgpack` section's data on
+/// ELF/PE, otherwise the whole file (Mach-O `__LINKEDIT`, or a trailing overlay
+/// fallback), where the trailer is found via [`payload_end`].
+fn overlay_region(file: &[u8]) -> Cow<'_, [u8]> {
+    use object::{Object, ObjectSection};
+    if let Ok(obj) = object::File::parse(file)
+        && let Some(section) = obj.section_by_name(PAYLOAD_SECTION)
+        && let Ok(data) = section.data()
+    {
+        // Trust the section's virtual size (exact) over the file-aligned,
+        // possibly zero-padded on-disk size.
+        let n = usize::try_from(section.size())
+            .unwrap_or(data.len())
+            .min(data.len());
+        return Cow::Owned(data[..n].to_vec());
     }
-    let t = &bytes[bytes.len() - TRAILER_SIZE..];
+    Cow::Borrowed(file)
+}
+
+/// Read and validate the fixed trailer from the logical end of `bytes`.
+fn read_trailer(bytes: &[u8]) -> Option<Trailer> {
+    let end = payload_end(bytes);
+    let t = bytes.get(end.checked_sub(TRAILER_SIZE)?..end)?;
     if t[0..8] != MAGIC {
         return None;
     }
@@ -112,17 +143,17 @@ fn read_trailer(bytes: &[u8]) -> Option<Trailer> {
     })
 }
 
-/// Returns `true` if `bytes` ends with a valid trailer magic.
-pub fn is_packed(bytes: &[u8]) -> bool {
-    read_trailer(bytes).is_some()
+/// Returns `true` if `file` carries a packer overlay.
+pub fn is_packed(file: &[u8]) -> bool {
+    read_trailer(&overlay_region(file)).is_some()
 }
 
-/// The container format version `bytes` was packed with, if it is packed.
+/// The container format version `file` was packed with, if it is packed.
 ///
 /// This works even for versions this build cannot fully decode, so callers can
 /// report a useful message instead of a hard failure.
-pub fn packed_format_version(bytes: &[u8]) -> Option<u16> {
-    read_trailer(bytes).map(|t| t.format_version)
+pub fn packed_format_version(file: &[u8]) -> Option<u16> {
+    read_trailer(&overlay_region(file)).map(|t| t.format_version)
 }
 
 /// Whether this build can decode footers written with `format_version`.
@@ -170,10 +201,10 @@ fn encode_trailer(format_version: u16, body_len: u32) -> [u8; TRAILER_SIZE] {
     t
 }
 
-/// Build the full byte image of a packed binary from a stub, the original
-/// executable, and packing options.
-pub fn pack(
-    stub: &[u8],
+/// Build the packer overlay — `[name][compressed payload][footer body][trailer]`
+/// — that carries the original executable. This is what gets appended after the
+/// stub (ELF/PE) or embedded inside `__LINKEDIT` (Mach-O).
+pub fn build_overlay(
     original: &[u8],
     name: &str,
     algorithm: Algorithm,
@@ -198,10 +229,8 @@ pub fn pack(
     let body_len = u32::try_from(body.len()).expect("v1 body length fits in u32");
     let trailer = encode_trailer(FORMAT_VERSION, body_len);
 
-    let mut out = Vec::with_capacity(
-        stub.len() + name_bytes.len() + compressed.len() + body.len() + TRAILER_SIZE,
-    );
-    out.extend_from_slice(stub);
+    let mut out =
+        Vec::with_capacity(name_bytes.len() + compressed.len() + body.len() + TRAILER_SIZE);
     out.extend_from_slice(name_bytes);
     out.extend_from_slice(&compressed);
     out.extend_from_slice(&body);
@@ -229,7 +258,7 @@ fn layout(bytes: &[u8]) -> Result<Layout> {
         );
     }
 
-    let body_end = bytes.len() - TRAILER_SIZE;
+    let body_end = payload_end(bytes) - TRAILER_SIZE;
     let body_start = body_end
         .checked_sub(trailer.body_len)
         .context("footer body length is larger than the file")?;
@@ -257,21 +286,23 @@ fn layout(bytes: &[u8]) -> Result<Layout> {
 ///
 /// The loader uses this to check its extraction cache cheaply before deciding
 /// whether the expensive [`extract`] is needed.
-pub fn peek(bytes: &[u8]) -> Result<(Footer, String)> {
-    let l = layout(bytes)?;
-    let name = String::from_utf8(bytes[l.name_start..l.payload_start].to_vec())
+pub fn peek(file: &[u8]) -> Result<(Footer, String)> {
+    let region = overlay_region(file);
+    let l = layout(&region)?;
+    let name = String::from_utf8(region[l.name_start..l.payload_start].to_vec())
         .context("original file name is not valid UTF-8")?;
     Ok((l.footer, name))
 }
 
 /// Recover the original executable from the full bytes of a packed binary.
-pub fn extract(bytes: &[u8]) -> Result<Extracted> {
-    let l = layout(bytes)?;
+pub fn extract(file: &[u8]) -> Result<Extracted> {
+    let region = overlay_region(file);
+    let l = layout(&region)?;
     let footer = l.footer;
 
-    let name = String::from_utf8(bytes[l.name_start..l.payload_start].to_vec())
+    let name = String::from_utf8(region[l.name_start..l.payload_start].to_vec())
         .context("original file name is not valid UTF-8")?;
-    let compressed = &bytes[l.payload_start..l.payload_end];
+    let compressed = &region[l.payload_start..l.payload_end];
 
     // Capacity hint only; a value too large for usize just means "don't
     // preallocate", so a saturating fallback is fine here.
@@ -306,6 +337,17 @@ mod tests {
 
     // A stand-in for the loader stub. `is_packed` must be false for it alone.
     const STUB: &[u8] = b"\x7fELF fake stub bytes that do not end in the magic";
+
+    /// Overlay appended after the stub (the ELF/PE layout), for tests.
+    fn pack(
+        stub: &[u8],
+        original: &[u8],
+        name: &str,
+        algorithm: Algorithm,
+        level: u8,
+    ) -> Result<Vec<u8>> {
+        Ok([stub, &build_overlay(original, name, algorithm, level)?].concat())
+    }
 
     fn roundtrip(algo: Algorithm) {
         let original = b"the original executable payload, repeated. ".repeat(500);
@@ -396,5 +438,75 @@ mod tests {
         assert!(!is_packed(STUB));
         assert!(!is_packed(&[]));
         assert_eq!(packed_format_version(STUB), None);
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+        target_os = "solaris",
+        target_os = "illumos",
+        target_os = "haiku",
+        target_os = "windows",
+    ))]
+    type AddSection = fn(&[u8], &str, &[u8]) -> Result<Vec<u8>>;
+
+    /// Full loader path for a section-based payload: build an overlay, put it in
+    /// a `.cgpack` section of `stub`, then detect + extract it back.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+        target_os = "solaris",
+        target_os = "illumos",
+        target_os = "haiku",
+        target_os = "windows",
+    ))]
+    fn section_roundtrip(stub: &[u8], add: AddSection) {
+        let original = b"the original program, repeated to compress. ".repeat(800);
+        let overlay = build_overlay(&original, "myprog", Algorithm::Zstd, 90).unwrap();
+        let packed = add(stub, PAYLOAD_SECTION, &overlay).unwrap();
+
+        assert!(is_packed(&packed), "packed binary should be detected");
+        assert_eq!(packed_format_version(&packed), Some(FORMAT_VERSION));
+        let extracted = extract(&packed).unwrap();
+        assert_eq!(extracted.name, "myprog");
+        assert_eq!(extracted.original, original);
+    }
+
+    // The test binary is itself an ELF (on ELF platforms) or a PE (on Windows),
+    // so it doubles as the stub fixture.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+        target_os = "solaris",
+        target_os = "illumos",
+        target_os = "haiku",
+    ))]
+    #[test]
+    fn elf_section_payload_roundtrips() {
+        let stub = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        if crate::elf::is_supported(&stub) {
+            section_roundtrip(&stub, crate::elf::add_section);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn pe_section_payload_roundtrips() {
+        let stub = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        if crate::pe::is_supported(&stub) {
+            section_roundtrip(&stub, crate::pe::add_section);
+        }
     }
 }
