@@ -27,17 +27,23 @@ jobs:
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 #v1
       - name: Update Rust
         run: rustup update
+      - name: Install cargo audit & auditable
+        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+        with:
+          tool: cargo-audit,cargo-auditable
       - name: cargo test
         run: cargo test --all-features
       - name: Test with hello world
         run: |
           cargo install --path .
           cd hello_world
-          cargo pack build
+          cargo auditable pack build
           cargo pack info ./target/debug/hello-world${{ matrix.platform.ext }}
+          cargo audit bin ./target/debug/hello-world${{ matrix.platform.ext }}
           ./target/debug/hello-world${{ matrix.platform.ext }}
           cargo pack unpack ./target/debug/hello-world${{ matrix.platform.ext }}
-          ./target/debug/hello-world${{ matrix.platform.ext }}
+          ./hello-world${{ matrix.platform.ext }}
+          cargo audit bin ./hello-world${{ matrix.platform.ext }}
 
   fmt_clippy:
     runs-on: ubuntu-latest
