@@ -1,4 +1,9 @@
-# cargo-pack
+## cargo-pack
+
+[![Test](https://github.com/rjzak/cargo-pack/actions/workflows/ci.yml/badge.svg)](https://github.com/rjzak/cargo-pack/actions/workflows/ci.yml)
+[![Crates.io Version](https://img.shields.io/crates/v/cargo-packer)](https://crates.io/crates/cargo-packer)
+![Crates.io License](https://img.shields.io/crates/l/cargo-packer)
+
 
 Inspired by [UPX](https://upx.github.io), `cargo-pack` is a cargo subcommand that builds your project and packs the
 resulting binary into a compressed, self-extracting executable; and it and can unpack it just like UPX.
