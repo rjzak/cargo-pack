@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueHint};
 
 use crate::compress::{self, Algorithm};
 
@@ -71,7 +71,7 @@ pub struct UnpackArgs {
 
     /// Where to write the restored binary. Defaults to the original file name
     /// recorded at pack time, in the current directory.
-    #[arg(short, long)]
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
     pub output: Option<PathBuf>,
 
     /// Overwrite the output file if it already exists.
@@ -82,5 +82,6 @@ pub struct UnpackArgs {
 #[derive(Args)]
 pub struct InfoArgs {
     /// The binary to inspect.
+    #[arg(value_hint = ValueHint::FilePath)]
     pub input: PathBuf,
 }

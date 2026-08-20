@@ -376,6 +376,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn roundtrip_store() {
         roundtrip(Algorithm::Store);
     }

@@ -16,12 +16,6 @@ use crate::compress;
 use crate::util::{self, human_bytes, read_original};
 
 pub fn run(args: &BuildArgs, stub: &[u8]) -> Result<()> {
-    if !args.algorithm.selectable() {
-        bail!(
-            "the `{:?}` algorithm is only available in debug builds of cargo-pack",
-            args.algorithm
-        );
-    }
     let level = args.level;
     compress::validate_level(level)?;
 

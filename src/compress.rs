@@ -30,7 +30,8 @@ pub const DEFAULT_LEVEL: u8 = 90;
 pub enum Algorithm {
     /// No compression; the payload is stored verbatim. A testing aid, so it is
     /// only offered when packing with a debug build of `cargo-pack`.
-    #[cfg_attr(not(debug_assertions), value(hide = true))]
+    #[cfg(debug_assertions)]
+    #[value(hide = true)]
     Store,
     /// Zstandard. Excellent ratio with very fast decompression; the default.
     Zstd,
@@ -48,6 +49,7 @@ impl Algorithm {
     /// The stable on-disk id for this algorithm.
     pub fn to_u16(self) -> u16 {
         match self {
+            #[cfg(debug_assertions)]
             Algorithm::Store => 0,
             Algorithm::Zstd => 1,
             Algorithm::Deflate => 2,
@@ -60,6 +62,7 @@ impl Algorithm {
     /// Decode an algorithm from its on-disk id.
     pub fn from_u16(v: u16) -> Option<Algorithm> {
         match v {
+            #[cfg(debug_assertions)]
             0 => Some(Algorithm::Store),
             1 => Some(Algorithm::Zstd),
             2 => Some(Algorithm::Deflate),
@@ -74,7 +77,9 @@ impl Algorithm {
     /// no tunable level (`Store`, `Lz4`).
     fn native_range(self) -> Option<(u32, u32)> {
         match self {
-            Algorithm::Store | Algorithm::Lz4 => None,
+            #[cfg(debug_assertions)]
+            Algorithm::Store => None,
+            Algorithm::Lz4 => None,
             // zstd also supports negative "fast" levels, but this is a size
             // packer, so we only expose 1..=22.
             Algorithm::Zstd => Some((1, 22)),
@@ -92,14 +97,6 @@ impl Algorithm {
         // Round to nearest within [lo, hi]; level 0 -> lo, level 100 -> hi.
         Some(lo + (level * (hi - lo) + 50) / 100)
     }
-
-    /// Whether this algorithm may be *selected* for packing in the current
-    /// build. `Store` is a testing aid restricted to debug builds; every
-    /// algorithm can still be *decoded* regardless of build profile so that
-    /// existing packed binaries always unpack.
-    pub fn selectable(self) -> bool {
-        cfg!(debug_assertions) || !matches!(self, Algorithm::Store)
-    }
 }
 
 /// Compress `data` with `algorithm` at the given uniform effort `level` (0–100).
@@ -108,6 +105,7 @@ pub fn compress(algorithm: Algorithm, data: &[u8], level: u8) -> Result<Vec<u8>>
     // `Store`/`Lz4` cases, which ignore the value entirely.
     let native = algorithm.native_level(level).unwrap_or_default();
     match algorithm {
+        #[cfg(debug_assertions)]
         Algorithm::Store => Ok(data.to_vec()),
         // zstd's API is signed; our native range (1..=22) is always small and
         // non-negative, so this conversion never fails.
@@ -144,6 +142,7 @@ pub fn compress(algorithm: Algorithm, data: &[u8], level: u8) -> Result<Vec<u8>>
 /// not depend on it. The compression level is not needed to decompress.
 pub fn decompress(algorithm: Algorithm, data: &[u8], original_len: usize) -> Result<Vec<u8>> {
     match algorithm {
+        #[cfg(debug_assertions)]
         Algorithm::Store => Ok(data.to_vec()),
         Algorithm::Zstd => {
             let mut out = Vec::with_capacity(original_len);
@@ -187,6 +186,7 @@ mod tests {
 
     fn all() -> Vec<Algorithm> {
         vec![
+            #[cfg(debug_assertions)]
             Algorithm::Store,
             Algorithm::Zstd,
             Algorithm::Deflate,
@@ -218,6 +218,7 @@ mod tests {
         assert_eq!(Algorithm::Bzip2.native_level(MAX_LEVEL), Some(9));
         // Algorithms without a tunable level report none.
         assert_eq!(Algorithm::Lz4.native_level(DEFAULT_LEVEL), None);
+        #[cfg(debug_assertions)]
         assert_eq!(Algorithm::Store.native_level(DEFAULT_LEVEL), None);
     }
 
