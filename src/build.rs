@@ -50,27 +50,19 @@ fn cargo_build(cargo_args: &[String]) -> Result<Vec<PathBuf>> {
     let mut executables = Vec::new();
     for line in BufReader::new(stdout).lines() {
         let line = line.context("reading cargo output")?;
-        if line.is_empty() {
+        // cargo prints one JSON object per line. Rather than pull in a JSON
+        // parser we scan each line for just the three fields we need; anything
+        // we don't recognise is simply skipped.
+        if !line.contains("\"reason\":\"compiler-artifact\"") || !is_bin_artifact(&line) {
             continue;
         }
-        // Be tolerant: any line we can't understand is simply skipped.
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Some(exe) = json_string_field(&line, "executable") else {
+            // A non-runnable artifact (a library) or an explicit `null`.
             continue;
         };
-        if msg["reason"] != "compiler-artifact" {
-            continue;
-        }
-        let Some(exe) = msg["executable"].as_str() else {
-            continue;
-        };
-        let is_bin = msg["target"]["kind"]
-            .as_array()
-            .is_some_and(|kinds| kinds.iter().any(|k| k == "bin"));
-        if is_bin {
-            let path = PathBuf::from(exe);
-            if !executables.contains(&path) {
-                executables.push(path);
-            }
+        let path = PathBuf::from(exe);
+        if !executables.contains(&path) {
+            executables.push(path);
         }
     }
 
@@ -80,6 +72,74 @@ fn cargo_build(cargo_args: &[String]) -> Result<Vec<PathBuf>> {
     }
 
     Ok(executables)
+}
+
+/// Whether an artifact line describes a `bin` target, i.e. its `target.kind`
+/// array contains the element `"bin"`. This mirrors cargo's own notion of a
+/// runnable binary and excludes examples, tests, and libraries.
+fn is_bin_artifact(line: &str) -> bool {
+    let Some((_, rest)) = line.split_once("\"kind\":[") else {
+        return false;
+    };
+    let Some(end) = rest.find(']') else {
+        return false;
+    };
+    rest[..end]
+        .split(',')
+        .any(|elem| elem.trim().trim_matches('"') == "bin")
+}
+
+/// Extract the string value that immediately follows `"<key>":` in `line`,
+/// decoding JSON escapes. Returns `None` when the key is absent or its value is
+/// not a string (e.g. `null`).
+///
+/// This is a deliberately small, single-field reader rather than a JSON parser.
+/// It only needs to cope with what cargo actually emits — most importantly the
+/// `\\` and `\"` escapes in Windows executable paths — so the surrogate-pair
+/// side of `\uXXXX` is left unhandled; cargo never emits those in a path.
+fn json_string_field(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":");
+    let bytes = line.as_bytes();
+    let mut i = line.find(&needle)? + needle.len();
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+    // The value must be a string; `null` and anything else are rejected.
+    if bytes.get(i) != Some(&b'"') {
+        return None;
+    }
+    i += 1;
+
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'"' => return String::from_utf8(out).ok(),
+            b'\\' => {
+                i += 1;
+                match *bytes.get(i)? {
+                    b'"' => out.push(b'"'),
+                    b'\\' => out.push(b'\\'),
+                    b'/' => out.push(b'/'),
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'b' => out.push(0x08),
+                    b'f' => out.push(0x0C),
+                    b'u' => {
+                        let cp = u32::from_str_radix(line.get(i + 1..i + 5)?, 16).ok()?;
+                        let ch = char::from_u32(cp)?;
+                        out.extend_from_slice(ch.encode_utf8(&mut [0u8; 4]).as_bytes());
+                        i += 4;
+                    }
+                    _ => return None,
+                }
+            }
+            // Any other byte, including UTF-8 continuation bytes, copies through.
+            _ => out.push(b),
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Replace a single executable on disk with its packed form.
@@ -122,9 +182,60 @@ fn pack_in_place(
     let packed_entropy = util::entropy_calc(&packed);
     println!(
         "cargo pack: {name}: {} -> {} ({ratio:.1}% of original), \
-         entropy {original_entropy:.2} -> {packed_entropy:.2} bits/byte{sbom}",
+         entropy {original_entropy:.2} -> {packed_entropy:.2} {sbom}",
         human_bytes(original_len),
         human_bytes(packed_len),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_bin_artifact, json_string_field};
+
+    #[test]
+    fn extracts_executable_from_a_bin_artifact() {
+        let line = r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"app"},"executable":"/w/target/debug/app","fresh":false}"#;
+        assert!(line.contains("\"reason\":\"compiler-artifact\""));
+        assert!(is_bin_artifact(line));
+        assert_eq!(
+            json_string_field(line, "executable").as_deref(),
+            Some("/w/target/debug/app"),
+        );
+    }
+
+    #[test]
+    fn unescapes_windows_paths() {
+        let line = r#"{"executable":"C:\\Users\\me\\target\\debug\\app.exe"}"#;
+        assert_eq!(
+            json_string_field(line, "executable").as_deref(),
+            Some(r"C:\Users\me\target\debug\app.exe"),
+        );
+    }
+
+    #[test]
+    fn null_executable_is_rejected() {
+        let line = r#"{"reason":"compiler-artifact","target":{"kind":["lib"]},"executable":null}"#;
+        assert_eq!(json_string_field(line, "executable"), None);
+    }
+
+    #[test]
+    fn only_bin_kinds_match() {
+        assert!(is_bin_artifact(r#"{"target":{"kind":["bin"]}}"#));
+        assert!(is_bin_artifact(r#"{"target":{"kind":["bin","test"]}}"#));
+        assert!(!is_bin_artifact(r#"{"target":{"kind":["lib"]}}"#));
+        assert!(!is_bin_artifact(r#"{"target":{"kind":["example"]}}"#));
+        assert!(!is_bin_artifact(r#"{"reason":"build-script-executed"}"#));
+    }
+
+    #[test]
+    fn decodes_short_and_unicode_escapes() {
+        let line = r#"{"p":"a\tb\u0041\/c"}"#;
+        assert_eq!(json_string_field(line, "p").as_deref(), Some("a\tbA/c"));
+    }
+
+    #[test]
+    fn missing_key_returns_none() {
+        assert_eq!(json_string_field(r#"{"other":"x"}"#, "executable"), None);
+    }
 }

@@ -10,7 +10,7 @@ resulting binary into a compressed, self-extracting executable; and it and can u
 $ cargo pack build --release
    Compiling my-app v0.1.0
     Finished `release` profile [optimized] target(s)
-cargo pack: my-app: 8.4 MiB -> 3.1 MiB (36.9% of original)
+cargo pack: my-app: 8.4 MiB -> 3.1 MiB (36.9% of original), entropy 6.43 -> 7.59
 
 $ ./target/release/my-app          # runs exactly like the original
 ...
@@ -26,7 +26,7 @@ $ cargo build
 $ shasum target/debug/hello-world
 f90476a1870054adacca158b2da3704a2242c996  target/debug/hello-world
 $ cargo pack build
-cargo pack: hello-world: 458.1 KiB -> 1.7 MiB (381.3% of original)
+cargo pack: hello-world: 458.1 KiB -> 1.7 MiB (381.3% of original), entropy 6.31 -> 6.81
 $ shasum target/debug/hello-world
 49d793809969992d1e1a2c83ebd317fc3a6afbfa  target/debug/hello-world
 $ cargo pack unpack target/debug/hello-world
@@ -74,39 +74,36 @@ cargo pack build --algorithm xz --release                # strongest ratio
 cargo pack build --algorithm lz4 --release               # fastest
 ```
 
-`--level` is a single, uniform effort dial from **`0` (fastest, least
-compression)** to **`100` (smallest, most compression)**, default **`90`**. It
-is mapped onto each algorithm's native range, so you never have to remember
+`--level` is a single, uniform effort dial from **`0` (fastest, least compression)** to **`100` (smallest, most
+compression)**, default **`90`**. It is mapped onto each algorithm's native range, so you never have to remember
 that, say, zstd goes to 22 while xz goes to 9:
 
-| `--algorithm` | Codec | Notes |
-| --- | --- | --- |
-| `zstd` *(default)* | Zstandard | Excellent ratio, very fast decompression. |
-| `deflate` | DEFLATE (raw) | Ubiquitous, modest ratio. |
-| `lz4` | LZ4 (Lempel–Ziv) | Weakest ratio, quickest. Ignores `--level`. |
-| `xz` | XZ / LZMA2 | Strongest ratio, slowest to pack. |
-| `bzip2` | bzip2 (Burrows–Wheeler) | Strong ratio, slower than zstd. |
+| `--algorithm` | Codec | Notes                                                                          |
+| --- | --- |--------------------------------------------------------------------------------|
+| `zstd` *(default)* | Zstandard | Excellent ratio, very fast decompression.                                      |
+| `lz4` | LZ4 (Lempel–Ziv) | Weakest ratio, quickest. Ignores `--level`.                                    |
+| `xz` | XZ / LZMA2 | Strongest ratio, slowest to pack. Requires compilation with the `xz` feature.  |
+| `bzip2` | bzip2 (Burrows–Wheeler) | Strong ratio, slower than zstd. Requires compilation with the `bzip2` feature. |
 
-Every algorithm can always be *decoded*, so `cargo pack unpack` and `info` work
-on any packed binary regardless of how the installed `cargo-pack` was built; the
-`store` restriction only limits which algorithm you can *select* when packing.
+Every algorithm can always be *decoded*, so `cargo pack unpack` and `info` work on any packed binary regardless of how
+the installed `cargo-pack` was built; the `store` restriction only limits which algorithm you can *select* when packing.
 
+> [!IMPORTANT]
 > **Ordering matters.** `cargo pack`'s own flags (`--algorithm`, `--level`) must
 > come **before** the forwarded cargo arguments. Everything from the first
 > cargo argument onward is passed straight through to `cargo build`.
 
 ## How it works
 
-`cargo-pack` is **self-hosting**: the `cargo-pack` binary is *both* the CLI and
-the runtime loader. Packing copies the `cargo-pack` executable and appends the
-compressed original plus a small trailing footer:
+`cargo-pack` is **self-hosting**: the `cargo-pack` binary is *both* the CLI and the runtime loader. Packing copies
+the `cargo-pack` executable and appends the compressed original plus a small trailing footer:
 
 ```text
 [ cargo-pack stub ][ original name ][ compressed payload ][ footer body ][ trailer ]
 ```
 
-The payload is stored *inside the binary's own structure* on all three object
-formats, so the packed file stays valid and signable (no data trailing the file):
+The payload is stored *inside the binary's own structure* on all three object formats, so the packed file stays valid
+and signable (no data trailing the file):
 
 - **ELF** (Linux, the BSDs, …): appended as a non-`ALLOC` `.cgpack` section
   (append-only — program headers are untouched, so it loads unchanged).
@@ -116,27 +113,23 @@ formats, so the packed file stays valid and signable (no data trailing the file)
   signature, and re-signed — producing a valid, strictly-signable Mach-O you can
   re-sign with your own Developer ID.
 
-All of this is pure Rust — no external tools. If a particular object shape can't
-take a section, cargo-pack falls back to a trailing overlay. The loader finds the
-payload the same way regardless: the `.cgpack` section if present, otherwise the
-trailer at the container's logical end.
+All of this is pure Rust — no external tools. If a particular object shape can't take a section, cargo-pack falls back
+to a trailing overlay. The loader finds the payload the same way regardless: the `.cgpack` section if present, otherwise
+the trailer at the container's logical end.
 
-When a packed binary runs, it reads its own trailing metadata, decompresses the
-original into a per-user cache (verified by CRC32), and `exec`s it —
-transparently forwarding all arguments. Because the packer reuses its own
-already-built executable as the stub, there is no separate stub crate and no
-cross-compilation step. Additionally, the trailer contains a `u16` for versioning,
-in case the trailer format would change.
+When a packed binary runs, it reads its own trailing metadata, decompresses the original into a per-user cache
+(verified by CRC32), and `exec`s it — transparently forwarding all arguments. Because the packer reuses its own
+already-built executable as the stub, there is no separate stub crate and no cross-compilation step. Additionally,
+the trailer contains a `u16` for versioning, in case the trailer format would change.
 
-`cargo pack build` is idempotent: re-packing an already-packed binary recovers
-the original first, so you never nest a pack inside a pack.
+`cargo pack build` is idempotent: re-packing an already-packed binary recovers the original first, so you never nest
+a pack inside a pack.
 
 ## cargo-auditable
 
 [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) embeds a
-dependency SBOM into a `.dep-v0` section that `cargo audit bin` reads. Packing
-replaces your binary with the loader stub, which would normally hide that
-section — so `cargo pack build` copies it into the packed binary:
+dependency SBOM into a `.dep-v0` section that `cargo audit bin` reads. Packing replaces your binary with the loader
+stub, which would normally hide that section — so `cargo pack build` copies it into the packed binary:
 
 ```console
 cargo auditable pack build --release
@@ -160,9 +153,8 @@ This works on every supported platform, in pure Rust with no external tools:
   `macos-auditable` feature and the slot entirely; macOS then behaves like the
   fallback below. ELF/PE targets have no such slot regardless.
 
-If the SBOM is too large for the macOS slot, packing still succeeds and prints a
-note — the original, SBOM and all, is always restored byte-for-byte by
-`cargo pack unpack`, so you can audit the recovered binary:
+If the SBOM is too large for the macOS slot, packing still succeeds and prints a note — the original, SBOM and all,
+is always restored byte-for-byte by `cargo pack unpack`, so you can audit the recovered binary:
 
 ```console
 cargo pack unpack target/release/my-app -o my-app.orig

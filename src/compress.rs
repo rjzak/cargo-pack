@@ -13,6 +13,7 @@
 //! most compression"; [`native_level`] maps that dial onto whatever range the
 //! chosen algorithm actually uses.
 
+#[cfg(feature = "xz")]
 use std::io::{Read, Write};
 
 use anyhow::{Result, ensure};
@@ -38,6 +39,7 @@ pub enum Algorithm {
     /// LZ4, a fast Lempel–Ziv codec. Weakest ratio, quickest to pack/unpack.
     Lz4,
     /// XZ / LZMA2. Strongest ratio, slowest to pack.
+    #[cfg(feature = "xz")]
     Xz,
     /// bzip2. Strong ratio via Burrows–Wheeler; slower than zstd.
     #[cfg(feature = "bzip2")]
@@ -52,6 +54,7 @@ impl Algorithm {
             Algorithm::Store => 0,
             Algorithm::Zstd => 1,
             Algorithm::Lz4 => 2,
+            #[cfg(feature = "xz")]
             Algorithm::Xz => 3,
             #[cfg(feature = "bzip2")]
             Algorithm::Bzip2 => 4,
@@ -65,6 +68,7 @@ impl Algorithm {
             0 => Some(Algorithm::Store),
             1 => Some(Algorithm::Zstd),
             2 => Some(Algorithm::Lz4),
+            #[cfg(feature = "xz")]
             3 => Some(Algorithm::Xz),
             #[cfg(feature = "bzip2")]
             4 => Some(Algorithm::Bzip2),
@@ -82,6 +86,7 @@ impl Algorithm {
             // zstd also supports negative "fast" levels, but this is a size
             // packer, so we only expose 1..=22.
             Algorithm::Zstd => Some((1, 22)),
+            #[cfg(feature = "xz")]
             Algorithm::Xz => Some((0, 9)),
             #[cfg(feature = "bzip2")]
             Algorithm::Bzip2 => Some((1, 9)),
@@ -117,6 +122,7 @@ pub fn compress(algorithm: Algorithm, data: &[u8], level: u8) -> Result<Vec<u8>>
             // Prepends the uncompressed length so decode needs no external hint.
             Ok(lz4_flex::compress_prepend_size(data))
         }
+        #[cfg(feature = "xz")]
         Algorithm::Xz => {
             let mut enc = xz2::write::XzEncoder::new(Vec::new(), native);
             enc.write_all(data)?;
@@ -146,6 +152,7 @@ pub fn decompress(algorithm: Algorithm, data: &[u8], original_len: usize) -> Res
         }
         Algorithm::Lz4 => lz4_flex::decompress_size_prepended(data)
             .map_err(|e| anyhow::anyhow!("lz4 decompression failed: {e}")),
+        #[cfg(feature = "xz")]
         Algorithm::Xz => {
             let mut out = Vec::with_capacity(original_len);
             xz2::read::XzDecoder::new(data).read_to_end(&mut out)?;
@@ -181,6 +188,7 @@ mod tests {
             Algorithm::Store,
             Algorithm::Zstd,
             Algorithm::Lz4,
+            #[cfg(feature = "xz")]
             Algorithm::Xz,
             #[cfg(feature = "bzip2")]
             Algorithm::Bzip2,
@@ -204,7 +212,9 @@ mod tests {
         // Extremes of the uniform scale hit the extremes of each native range.
         assert_eq!(Algorithm::Zstd.native_level(MIN_LEVEL), Some(1));
         assert_eq!(Algorithm::Zstd.native_level(MAX_LEVEL), Some(22));
+        #[cfg(feature = "xz")]
         assert_eq!(Algorithm::Xz.native_level(MIN_LEVEL), Some(0));
+        #[cfg(feature = "xz")]
         assert_eq!(Algorithm::Xz.native_level(MAX_LEVEL), Some(9));
         #[cfg(feature = "bzip2")]
         assert_eq!(Algorithm::Bzip2.native_level(MAX_LEVEL), Some(9));

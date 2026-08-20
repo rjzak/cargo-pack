@@ -32,7 +32,9 @@ jobs:
         with:
           tool: cargo-audit,cargo-auditable
       - name: cargo test
-        run: cargo test --all-features
+        run: |
+          cargo test --all-features
+          cargo test --release
       - name: Test with hello world
         run: |
           cargo install --path .
