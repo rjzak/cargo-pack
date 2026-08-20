@@ -35,13 +35,12 @@ pub enum Algorithm {
     Store,
     /// Zstandard. Excellent ratio with very fast decompression; the default.
     Zstd,
-    /// DEFLATE (raw, no zlib/gzip wrapper). Ubiquitous, modest ratio.
-    Deflate,
     /// LZ4, a fast Lempel–Ziv codec. Weakest ratio, quickest to pack/unpack.
     Lz4,
     /// XZ / LZMA2. Strongest ratio, slowest to pack.
     Xz,
     /// bzip2. Strong ratio via Burrows–Wheeler; slower than zstd.
+    #[cfg(feature = "bzip2")]
     Bzip2,
 }
 
@@ -52,10 +51,10 @@ impl Algorithm {
             #[cfg(debug_assertions)]
             Algorithm::Store => 0,
             Algorithm::Zstd => 1,
-            Algorithm::Deflate => 2,
-            Algorithm::Lz4 => 3,
-            Algorithm::Xz => 4,
-            Algorithm::Bzip2 => 5,
+            Algorithm::Lz4 => 2,
+            Algorithm::Xz => 3,
+            #[cfg(feature = "bzip2")]
+            Algorithm::Bzip2 => 4,
         }
     }
 
@@ -65,10 +64,10 @@ impl Algorithm {
             #[cfg(debug_assertions)]
             0 => Some(Algorithm::Store),
             1 => Some(Algorithm::Zstd),
-            2 => Some(Algorithm::Deflate),
-            3 => Some(Algorithm::Lz4),
-            4 => Some(Algorithm::Xz),
-            5 => Some(Algorithm::Bzip2),
+            2 => Some(Algorithm::Lz4),
+            3 => Some(Algorithm::Xz),
+            #[cfg(feature = "bzip2")]
+            4 => Some(Algorithm::Bzip2),
             _ => None,
         }
     }
@@ -83,7 +82,8 @@ impl Algorithm {
             // zstd also supports negative "fast" levels, but this is a size
             // packer, so we only expose 1..=22.
             Algorithm::Zstd => Some((1, 22)),
-            Algorithm::Deflate | Algorithm::Xz => Some((0, 9)),
+            Algorithm::Xz => Some((0, 9)),
+            #[cfg(feature = "bzip2")]
             Algorithm::Bzip2 => Some((1, 9)),
         }
     }
@@ -113,12 +113,6 @@ pub fn compress(algorithm: Algorithm, data: &[u8], level: u8) -> Result<Vec<u8>>
             let level = i32::try_from(native).expect("zstd native level fits in i32");
             Ok(zstd::encode_all(data, level)?)
         }
-        Algorithm::Deflate => {
-            let mut enc =
-                flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(native));
-            enc.write_all(data)?;
-            Ok(enc.finish()?)
-        }
         Algorithm::Lz4 => {
             // Prepends the uncompressed length so decode needs no external hint.
             Ok(lz4_flex::compress_prepend_size(data))
@@ -128,6 +122,7 @@ pub fn compress(algorithm: Algorithm, data: &[u8], level: u8) -> Result<Vec<u8>>
             enc.write_all(data)?;
             Ok(enc.finish()?)
         }
+        #[cfg(feature = "bzip2")]
         Algorithm::Bzip2 => {
             let mut enc = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::new(native));
             enc.write_all(data)?;
@@ -149,11 +144,6 @@ pub fn decompress(algorithm: Algorithm, data: &[u8], original_len: usize) -> Res
             zstd::stream::copy_decode(data, &mut out)?;
             Ok(out)
         }
-        Algorithm::Deflate => {
-            let mut out = Vec::with_capacity(original_len);
-            flate2::read::DeflateDecoder::new(data).read_to_end(&mut out)?;
-            Ok(out)
-        }
         Algorithm::Lz4 => lz4_flex::decompress_size_prepended(data)
             .map_err(|e| anyhow::anyhow!("lz4 decompression failed: {e}")),
         Algorithm::Xz => {
@@ -161,6 +151,7 @@ pub fn decompress(algorithm: Algorithm, data: &[u8], original_len: usize) -> Res
             xz2::read::XzDecoder::new(data).read_to_end(&mut out)?;
             Ok(out)
         }
+        #[cfg(feature = "bzip2")]
         Algorithm::Bzip2 => {
             let mut out = Vec::with_capacity(original_len);
             bzip2::read::BzDecoder::new(data).read_to_end(&mut out)?;
@@ -189,9 +180,9 @@ mod tests {
             #[cfg(debug_assertions)]
             Algorithm::Store,
             Algorithm::Zstd,
-            Algorithm::Deflate,
             Algorithm::Lz4,
             Algorithm::Xz,
+            #[cfg(feature = "bzip2")]
             Algorithm::Bzip2,
         ]
     }
@@ -215,6 +206,7 @@ mod tests {
         assert_eq!(Algorithm::Zstd.native_level(MAX_LEVEL), Some(22));
         assert_eq!(Algorithm::Xz.native_level(MIN_LEVEL), Some(0));
         assert_eq!(Algorithm::Xz.native_level(MAX_LEVEL), Some(9));
+        #[cfg(feature = "bzip2")]
         assert_eq!(Algorithm::Bzip2.native_level(MAX_LEVEL), Some(9));
         // Algorithms without a tunable level report none.
         assert_eq!(Algorithm::Lz4.native_level(DEFAULT_LEVEL), None);
