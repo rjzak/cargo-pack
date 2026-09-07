@@ -37,11 +37,11 @@ anyhow = "1.0"
 bytecount = { version = "0.6.9", features = ["runtime-dispatch-simd"] }
 bzip2 = { version = "0.6.1", optional = true }
 clap = { version = "4.6", default-features = false, features = ["derive", "help", "std"] }
-crc32fast = "1.5.0"
+crc32fast = "1.5.1"
 lz4_flex = "0.14.0"
 object = { version = "0.40.0", default-features = false, features = ["read", "std"] }
 xz2 = { version = "0.1.7", features = ["static"], optional = true }
-zstd = "0.13.3"
+zstd = "0.14.0"
 
 [profile.release]
 codegen-units = 1
