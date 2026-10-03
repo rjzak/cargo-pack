@@ -18,7 +18,7 @@ jobs:
             os: linux
             musl: aarch64-unknown-linux-musl
             name: cargo-pack-aarch64-linux-musl
-          - runner: macos-15
+          - runner: macos-latest
             os: macos
             name: cargo-pack-arm64-darwin
           - runner: windows-latest
