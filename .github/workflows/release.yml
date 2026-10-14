@@ -37,7 +37,7 @@ jobs:
       - name: Update Rust
         run: rustup update
       - name: Install cargo auditable
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-auditable
       - name: Install musl
@@ -87,7 +87,7 @@ jobs:
       - name: Update Rust
         run: rustup update
       - name: Install cargo audit & auditable
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-audit,cargo-auditable
       - name: cargo test
